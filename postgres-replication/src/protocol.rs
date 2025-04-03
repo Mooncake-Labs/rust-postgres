@@ -740,6 +740,96 @@ impl TruncateBody {
     }
 }
 
+// A Stream Start replication message (v2)
+#[derive(Debug)]
+pub struct StreamStartBody {
+    xid: u32,
+    is_first_segment: u8,
+}
+
+impl StreamStartBody {
+    #[inline]
+    /// The transaction ID of the transaction that started the stream
+    pub fn xid(&self) -> u32 {
+        self.xid
+    }
+
+    #[inline]
+    /// Whether this is the first segment of the stream for this XID
+    pub fn is_first_segment(&self) -> u8 {
+        self.is_first_segment
+    }
+}
+
+/// A Stream Stop replication message (v2)
+#[derive(Debug)]
+pub struct StreamStopBody {
+    // This message has no additional data fields
+}
+
+/// A Stream Commit replication message (v2)
+#[derive(Debug)]
+pub struct StreamCommitBody {
+    xid: u32,
+    flags: i8,
+    commit_lsn: u64,
+    end_lsn: u64,
+    timestamp: i64,
+}
+
+impl StreamCommitBody {
+    #[inline]
+    /// Xid of the transaction.
+    pub fn xid(&self) -> u32 {
+        self.xid
+    }
+
+    #[inline]
+    /// Flags; currently unused.
+    pub fn flags(&self) -> i8 {
+        self.flags
+    }
+
+    #[inline]
+    /// The LSN of the commit.
+    pub fn commit_lsn(&self) -> Lsn {
+        self.commit_lsn
+    }
+
+    #[inline]
+    /// The end LSN of the transaction.
+    pub fn end_lsn(&self) -> Lsn {
+        self.end_lsn
+    }
+
+    #[inline]
+    /// Commit timestamp of the transaction. The value is in number of microseconds since PostgreSQL epoch (2000-01-01).
+    pub fn timestamp(&self) -> i64 {
+        self.timestamp
+    }
+}
+
+/// A Stream Abort replication message (v2)
+#[derive(Debug)]
+pub struct StreamAbortBody {
+    xid: u32,
+    subxid: u32,
+}
+
+impl StreamAbortBody {
+    #[inline]
+    /// Xid of the transaction.
+    pub fn xid(&self) -> u32 {
+        self.xid
+    }
+
+    #[inline]
+    /// Xid of the subtransaction (will be same as xid of the transaction for top-level transactions).
+    pub fn subxid(&self) -> u32 {
+        self.subxid
+    }
+}
+
 struct Buffer {
     bytes: Bytes,
     idx: usize,
