@@ -104,6 +104,7 @@ pin_project! {
     pub struct LogicalReplicationStream {
         #[pin]
         stream: ReplicationStream,
+        protocol_version: u8,
     }
 }
 
@@ -112,6 +113,7 @@ impl LogicalReplicationStream {
     pub fn new(stream: CopyBothDuplex<Bytes>) -> Self {
         Self {
             stream: ReplicationStream::new(stream),
+            protocol_version: 1,
         }
     }
 

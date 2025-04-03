@@ -198,7 +198,7 @@ pub enum LogicalReplicationMessage {
 }
 
 impl LogicalReplicationMessage {
-    pub fn parse(buf: &Bytes) -> io::Result<Self> {
+    pub fn parse(buf: &Bytes, protocol_version: u8) -> io::Result<Self> {
         let mut buf = Buffer {
             bytes: buf.clone(),
             idx: 0,
