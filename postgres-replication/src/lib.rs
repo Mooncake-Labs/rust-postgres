@@ -110,10 +110,10 @@ pin_project! {
 
 impl LogicalReplicationStream {
     /// Creates a new LogicalReplicationStream that will wrap the underlying CopyBoth stream
-    pub fn new(stream: CopyBothDuplex<Bytes>) -> Self {
+    pub fn new(stream: CopyBothDuplex<Bytes>, protocol_version: Option<u8>) -> Self {
         Self {
             stream: ReplicationStream::new(stream),
-            protocol_version: 1,
+            protocol_version: protocol_version.unwrap_or(1),
         }
     }
 
@@ -159,11 +159,12 @@ impl Stream for LogicalReplicationStream {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
+        let protocol_version: u8 = *this.protocol_version;
 
         match ready!(this.stream.poll_next(cx)) {
             Some(Ok(ReplicationMessage::XLogData(body))) => {
                 let body = body
-                    .map_data(|buf| LogicalReplicationMessage::parse(&buf))
+                    .map_data(|buf| LogicalReplicationMessage::parse(&buf, protocol_version))
                     .map_err(Error::parse)?;
                 Poll::Ready(Some(Ok(ReplicationMessage::XLogData(body))))
             }
