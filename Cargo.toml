@@ -1,11 +1,8 @@
 [workspace]
 members = [
-    "codegen",
     "postgres",
     "postgres-derive",
     "postgres-derive-test",
-    "postgres-native-tls",
-    "postgres-openssl",
     "postgres-protocol",
     "postgres-replication",
     "postgres-types",
