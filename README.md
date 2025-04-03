@@ -1,34 +1,21 @@
-# Materialize fork of Rust-Postgres
+# Slimmed-down Rust-Postgres
 
-This repo serves as a staging area for Materialize patches to the
-[rust-postgres] client before they are accepted upstream.
+This repository contains a slimmed-down version of the [rust-postgres] client with only the following crates:
 
-There are no releases from this fork. The [MaterializeInc/materialize]
-repository simply pins a recent commit from the `master` branch. Other projects
-are welcome to do the same. The `master` branch is never force pushed. Upstream
-changes are periodically into `master` via `git merge`.
+- tokio-postgres: A native, asynchronous PostgreSQL client 
+- postgres-replication: Protocol definitions for the Postgres logical replication protocol
+- postgres-protocol: Low level Postgres protocol APIs
+- postgres-types: Conversions between Rust and Postgres values (required dependency)
+- postgres-derive: An internal crate used by postgres-types (required dependency)
 
-## Adding a new patch
+All testing components related to these crates have been retained, including:
+- postgres: The synchronous PostgreSQL client (kept for testing purposes)
+- postgres-derive-test: Testing code for postgres-derive
+- test: Shared test utilities and certificates
+- docker: Docker setup for testing
 
-Develop your patch against the master branch of the upstream [rust-postgres]
-project. Open a PR with your changes. If your PR is not merged quickly, open the
-same PR against this repository and request a review from a Materialize
-engineer.
+## Original Repository
 
-The long-term goal is to get every patch merged upstream.
-
-## Integrating upstream changes
-
-```shell
-git clone https://github.com/MaterializeInc/rust-postgres.git
-git remote add upstream https://github.com/sfackler/rust-postgres.git
-git checkout master
-git pull
-git checkout -b integrate-upstream
-git fetch upstream
-git merge upstream/master
-# Resolve any conflicts, then open a PR against this repository with the merge commit.
-```
+This is derived from the [rust-postgres] client by Steven Fackler. The original repository contains additional crates that have been removed in this version.
 
 [rust-postgres]: https://github.com/sfackler/rust-postgres
-[MaterializeInc/materialize]: https://github.com/MaterializeInc/materialize
