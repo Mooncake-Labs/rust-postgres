@@ -26,6 +26,11 @@ const TUPLE_OLD_TAG: u8 = b'O';
 const TUPLE_DATA_NULL_TAG: u8 = b'n';
 const TUPLE_DATA_TOAST_TAG: u8 = b'u';
 const TUPLE_DATA_TEXT_TAG: u8 = b't';
+// logical replication version 2.0 message tags
+const STREAM_START_TAG: u8 = b'S';
+const STREAM_STOP_TAG: u8 = b'E';
+const STREAM_COMMIT_TAG: u8 = b'c';
+const STREAM_ABORT_TAG: u8 = b'A';
 
 // replica identity tags
 const REPLICA_IDENTITY_DEFAULT_TAG: u8 = b'd';
