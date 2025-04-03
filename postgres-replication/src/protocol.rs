@@ -186,6 +186,15 @@ pub enum LogicalReplicationMessage {
     Delete(DeleteBody),
     /// A TRUNCATE statement
     Truncate(TruncateBody),
+    /// (V2)
+    /// A STREAM START statement
+    StreamStart(StreamStartBody),
+    /// A STREAM STOP statement
+    StreamStop(StreamStopBody),
+    /// A STREAM COMMIT statement
+    StreamCommit(StreamCommitBody),
+    /// A STREAM ABORT statement
+    StreamAbort(StreamAbortBody),
 }
 
 impl LogicalReplicationMessage {
