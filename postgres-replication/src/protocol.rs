@@ -350,6 +350,23 @@ impl LogicalReplicationMessage {
 
                 Self::Truncate(TruncateBody { options, rel_ids })
             }
+            // Protocol v2 messages
+            STREAM_START_TAG if protocol_version >= 2 => Self::StreamStart(StreamStartBody {
+                xid: buf.read_u32::<BigEndian>()?,
+                is_first_segment: buf.read_u8()?,
+            }),
+            STREAM_STOP_TAG if protocol_version >= 2 => Self::StreamStop(StreamStopBody {}),
+            STREAM_COMMIT_TAG if protocol_version >= 2 => Self::StreamCommit(StreamCommitBody {
+                xid: buf.read_u32::<BigEndian>()?,
+                flags: buf.read_i8()?,
+                commit_lsn: buf.read_u64::<BigEndian>()?,
+                end_lsn: buf.read_u64::<BigEndian>()?,
+                timestamp: buf.read_i64::<BigEndian>()?,
+            }),
+            STREAM_ABORT_TAG if protocol_version >= 2 => Self::StreamAbort(StreamAbortBody {
+                xid: buf.read_u32::<BigEndian>()?,
+                subxid: buf.read_u32::<BigEndian>()?,
+            }),
             tag => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
