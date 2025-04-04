@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::io::{self, Read};
 use std::{cmp, str};
 
@@ -198,7 +199,11 @@ pub enum LogicalReplicationMessage {
 }
 
 impl LogicalReplicationMessage {
-    pub fn parse(buf: &Bytes, protocol_version: u8) -> io::Result<Self> {
+    pub fn parse(
+        buf: &Bytes,
+        protocol_version: u8,
+        in_streamed_transaciton: &Cell<bool>,
+    ) -> io::Result<Self> {
         let mut buf = Buffer {
             bytes: buf.clone(),
             idx: 0,
@@ -351,11 +356,19 @@ impl LogicalReplicationMessage {
                 Self::Truncate(TruncateBody { options, rel_ids })
             }
             // Protocol v2 messages
-            STREAM_START_TAG if protocol_version >= 2 => Self::StreamStart(StreamStartBody {
-                xid: buf.read_u32::<BigEndian>()?,
-                is_first_segment: buf.read_u8()?,
-            }),
-            STREAM_STOP_TAG if protocol_version >= 2 => Self::StreamStop(StreamStopBody {}),
+            STREAM_START_TAG if protocol_version >= 2 => {
+                in_streamed_transaciton.set(true);
+                Self::StreamStart(StreamStartBody {
+                    xid: buf.read_u32::<BigEndian>()?,
+                    is_first_segment: buf.read_u8()?,
+                })
+            }
+            STREAM_STOP_TAG if protocol_version >= 2 => {
+                // We should not be stopping the stream if we are currently in a transasction
+                // Either a commit or abort should be sent before the stop
+                assert!(!in_streamed_transaciton.get());
+                Self::StreamStop(StreamStopBody {})
+            }
             STREAM_COMMIT_TAG if protocol_version >= 2 => Self::StreamCommit(StreamCommitBody {
                 xid: buf.read_u32::<BigEndian>()?,
                 flags: buf.read_i8()?,
@@ -363,10 +376,13 @@ impl LogicalReplicationMessage {
                 end_lsn: buf.read_u64::<BigEndian>()?,
                 timestamp: buf.read_i64::<BigEndian>()?,
             }),
-            STREAM_ABORT_TAG if protocol_version >= 2 => Self::StreamAbort(StreamAbortBody {
-                xid: buf.read_u32::<BigEndian>()?,
-                subxid: buf.read_u32::<BigEndian>()?,
-            }),
+            STREAM_ABORT_TAG if protocol_version >= 2 => {
+                in_streamed_transaciton.set(false);
+                Self::StreamAbort(StreamAbortBody {
+                    xid: buf.read_u32::<BigEndian>()?,
+                    subxid: buf.read_u32::<BigEndian>()?,
+                })
+            }
             tag => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,

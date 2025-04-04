@@ -1,5 +1,6 @@
 //! Utilities for working with the PostgreSQL replication copy both format.
 
+use std::cell::Cell;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -105,6 +106,7 @@ pin_project! {
         #[pin]
         stream: ReplicationStream,
         protocol_version: u8,
+        in_streamed_transaction: Cell<bool>,
     }
 }
 
@@ -114,6 +116,7 @@ impl LogicalReplicationStream {
         Self {
             stream: ReplicationStream::new(stream),
             protocol_version: protocol_version.unwrap_or(1),
+            in_streamed_transaction: Cell::new(false),
         }
     }
 
@@ -158,13 +161,20 @@ impl Stream for LogicalReplicationStream {
     type Item = Result<ReplicationMessage<LogicalReplicationMessage>, Error>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.project();
+        let mut this = self.project();
         let protocol_version: u8 = *this.protocol_version;
+        let stream = this.stream.as_mut();
 
-        match ready!(this.stream.poll_next(cx)) {
+        match ready!(stream.poll_next(cx)) {
             Some(Ok(ReplicationMessage::XLogData(body))) => {
                 let body = body
-                    .map_data(|buf| LogicalReplicationMessage::parse(&buf, protocol_version))
+                    .map_data(|buf| {
+                        LogicalReplicationMessage::parse(
+                            &buf,
+                            protocol_version,
+                            this.in_streamed_transaction,
+                        )
+                    })
                     .map_err(Error::parse)?;
                 Poll::Ready(Some(Ok(ReplicationMessage::XLogData(body))))
             }
