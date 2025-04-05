@@ -77,7 +77,7 @@ async fn test_replication() {
         .await
         .unwrap();
 
-    let stream = LogicalReplicationStream::new(copy_stream);
+    let stream = LogicalReplicationStream::new(copy_stream, None);
     tokio::pin!(stream);
 
     // verify that we can observe the transaction in the replication stream

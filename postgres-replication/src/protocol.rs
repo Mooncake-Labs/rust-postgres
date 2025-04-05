@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::io::{self, Read};
 use std::{cmp, str};
 
@@ -26,6 +27,11 @@ const TUPLE_OLD_TAG: u8 = b'O';
 const TUPLE_DATA_NULL_TAG: u8 = b'n';
 const TUPLE_DATA_TOAST_TAG: u8 = b'u';
 const TUPLE_DATA_TEXT_TAG: u8 = b't';
+// logical replication version 2.0 message tags
+const STREAM_START_TAG: u8 = b'S';
+const STREAM_STOP_TAG: u8 = b'E';
+const STREAM_COMMIT_TAG: u8 = b'c';
+const STREAM_ABORT_TAG: u8 = b'A';
 
 // replica identity tags
 const REPLICA_IDENTITY_DEFAULT_TAG: u8 = b'd';
@@ -181,10 +187,23 @@ pub enum LogicalReplicationMessage {
     Delete(DeleteBody),
     /// A TRUNCATE statement
     Truncate(TruncateBody),
+    /// (V2)
+    /// A STREAM START statement
+    StreamStart(StreamStartBody),
+    /// A STREAM STOP statement
+    StreamStop(StreamStopBody),
+    /// A STREAM COMMIT statement
+    StreamCommit(StreamCommitBody),
+    /// A STREAM ABORT statement
+    StreamAbort(StreamAbortBody),
 }
 
 impl LogicalReplicationMessage {
-    pub fn parse(buf: &Bytes) -> io::Result<Self> {
+    pub fn parse(
+        buf: &Bytes,
+        protocol_version: u8,
+        in_streamed_transaciton: &Cell<bool>,
+    ) -> io::Result<Self> {
         let mut buf = Buffer {
             bytes: buf.clone(),
             idx: 0,
@@ -209,6 +228,11 @@ impl LogicalReplicationMessage {
                 name: buf.read_cstr()?,
             }),
             RELATION_TAG => {
+                let xid = if in_streamed_transaciton.get() {
+                    Some(buf.read_u32::<BigEndian>()?)
+                } else {
+                    None
+                };
                 let rel_id = buf.read_u32::<BigEndian>()?;
                 let namespace = buf.read_cstr()?;
                 let name = buf.read_cstr()?;
@@ -232,6 +256,7 @@ impl LogicalReplicationMessage {
                 }
 
                 Self::Relation(RelationBody {
+                    xid,
                     rel_id,
                     namespace,
                     name,
@@ -240,11 +265,21 @@ impl LogicalReplicationMessage {
                 })
             }
             TYPE_TAG => Self::Type(TypeBody {
+                xid: if in_streamed_transaciton.get() {
+                    Some(buf.read_u32::<BigEndian>()?)
+                } else {
+                    None
+                },
                 id: buf.read_u32::<BigEndian>()?,
                 namespace: buf.read_cstr()?,
                 name: buf.read_cstr()?,
             }),
             INSERT_TAG => {
+                let xid = if in_streamed_transaciton.get() {
+                    Some(buf.read_u32::<BigEndian>()?)
+                } else {
+                    None
+                };
                 let rel_id = buf.read_u32::<BigEndian>()?;
                 let tag = buf.read_u8()?;
 
@@ -258,9 +293,14 @@ impl LogicalReplicationMessage {
                     }
                 };
 
-                Self::Insert(InsertBody { rel_id, tuple })
+                Self::Insert(InsertBody { xid, rel_id, tuple })
             }
             UPDATE_TAG => {
+                let xid = if in_streamed_transaciton.get() {
+                    Some(buf.read_u32::<BigEndian>()?)
+                } else {
+                    None
+                };
                 let rel_id = buf.read_u32::<BigEndian>()?;
                 let tag = buf.read_u8()?;
 
@@ -295,6 +335,7 @@ impl LogicalReplicationMessage {
                 };
 
                 Self::Update(UpdateBody {
+                    xid,
                     rel_id,
                     key_tuple,
                     old_tuple,
@@ -302,6 +343,11 @@ impl LogicalReplicationMessage {
                 })
             }
             DELETE_TAG => {
+                let xid = if in_streamed_transaciton.get() {
+                    Some(buf.read_u32::<BigEndian>()?)
+                } else {
+                    None
+                };
                 let rel_id = buf.read_u32::<BigEndian>()?;
                 let tag = buf.read_u8()?;
 
@@ -320,12 +366,18 @@ impl LogicalReplicationMessage {
                 }
 
                 Self::Delete(DeleteBody {
+                    xid,
                     rel_id,
                     key_tuple,
                     old_tuple,
                 })
             }
             TRUNCATE_TAG => {
+                let xid = if in_streamed_transaciton.get() {
+                    Some(buf.read_u32::<BigEndian>()?)
+                } else {
+                    None
+                };
                 let relation_len = buf.read_i32::<BigEndian>()?;
                 let options = buf.read_i8()?;
 
@@ -334,7 +386,34 @@ impl LogicalReplicationMessage {
                     rel_ids.push(buf.read_u32::<BigEndian>()?);
                 }
 
-                Self::Truncate(TruncateBody { options, rel_ids })
+                Self::Truncate(TruncateBody {
+                    xid,
+                    options,
+                    rel_ids,
+                })
+            }
+            // Protocol v2 messages
+            STREAM_START_TAG if protocol_version >= 2 => {
+                in_streamed_transaciton.set(true);
+                Self::StreamStart(StreamStartBody {
+                    xid: buf.read_u32::<BigEndian>()?,
+                    is_first_segment: buf.read_u8()?,
+                })
+            }
+            STREAM_STOP_TAG if protocol_version >= 2 => Self::StreamStop(StreamStopBody {}),
+            STREAM_COMMIT_TAG if protocol_version >= 2 => Self::StreamCommit(StreamCommitBody {
+                xid: buf.read_u32::<BigEndian>()?,
+                flags: buf.read_i8()?,
+                commit_lsn: buf.read_u64::<BigEndian>()?,
+                end_lsn: buf.read_u64::<BigEndian>()?,
+                timestamp: buf.read_i64::<BigEndian>()?,
+            }),
+            STREAM_ABORT_TAG if protocol_version >= 2 => {
+                in_streamed_transaciton.set(false);
+                Self::StreamAbort(StreamAbortBody {
+                    xid: buf.read_u32::<BigEndian>()?,
+                    subxid: buf.read_u32::<BigEndian>()?,
+                })
             }
             tag => {
                 return Err(io::Error::new(
@@ -559,6 +638,7 @@ pub enum ReplicaIdentity {
 /// A Relation replication message
 #[derive(Debug)]
 pub struct RelationBody {
+    xid: Option<u32>,
     rel_id: u32,
     namespace: Bytes,
     name: Bytes,
@@ -567,6 +647,12 @@ pub struct RelationBody {
 }
 
 impl RelationBody {
+    /// The transaction ID of the transaction that started the stream
+    #[inline]
+    pub fn xid(&self) -> Option<u32> {
+        self.xid
+    }
+
     #[inline]
     /// ID of the relation.
     pub fn rel_id(&self) -> u32 {
@@ -601,14 +687,21 @@ impl RelationBody {
 /// A Type replication message
 #[derive(Debug)]
 pub struct TypeBody {
+    xid: Option<u32>,
     id: u32,
     namespace: Bytes,
     name: Bytes,
 }
 
 impl TypeBody {
+    /// The transaction ID of the transaction that started the stream
     #[inline]
+    pub fn xid(&self) -> Option<u32> {
+        self.xid
+    }
+
     /// ID of the data type.
+    #[inline]
     pub fn id(&self) -> Oid {
         self.id
     }
@@ -629,11 +722,17 @@ impl TypeBody {
 /// An INSERT statement
 #[derive(Debug)]
 pub struct InsertBody {
+    xid: Option<u32>,
     rel_id: u32,
     tuple: Tuple,
 }
 
 impl InsertBody {
+    #[inline]
+    pub fn xid(&self) -> Option<u32> {
+        self.xid
+    }
+
     #[inline]
     /// ID of the relation corresponding to the ID in the relation message.
     pub fn rel_id(&self) -> u32 {
@@ -650,6 +749,7 @@ impl InsertBody {
 /// An UPDATE statement
 #[derive(Debug)]
 pub struct UpdateBody {
+    xid: Option<u32>,
     rel_id: u32,
     old_tuple: Option<Tuple>,
     key_tuple: Option<Tuple>,
@@ -657,6 +757,11 @@ pub struct UpdateBody {
 }
 
 impl UpdateBody {
+    #[inline]
+    pub fn xid(&self) -> Option<u32> {
+        self.xid
+    }
+
     #[inline]
     /// ID of the relation corresponding to the ID in the relation message.
     pub fn rel_id(&self) -> u32 {
@@ -687,12 +792,18 @@ impl UpdateBody {
 /// A DELETE statement
 #[derive(Debug)]
 pub struct DeleteBody {
+    xid: Option<u32>,
     rel_id: u32,
     old_tuple: Option<Tuple>,
     key_tuple: Option<Tuple>,
 }
 
 impl DeleteBody {
+    #[inline]
+    pub fn xid(&self) -> Option<u32> {
+        self.xid
+    }
+
     #[inline]
     /// ID of the relation corresponding to the ID in the relation message.
     pub fn rel_id(&self) -> u32 {
@@ -717,11 +828,17 @@ impl DeleteBody {
 /// A TRUNCATE statement
 #[derive(Debug)]
 pub struct TruncateBody {
+    xid: Option<u32>,
     options: i8,
     rel_ids: Vec<u32>,
 }
 
 impl TruncateBody {
+    #[inline]
+    pub fn xid(&self) -> Option<u32> {
+        self.xid
+    }
+
     #[inline]
     /// The IDs of the relations corresponding to the ID in the relation messages
     pub fn rel_ids(&self) -> &[u32] {
@@ -732,6 +849,96 @@ impl TruncateBody {
     /// Option bits for TRUNCATE: 1 for CASCADE, 2 for RESTART IDENTITY
     pub fn options(&self) -> i8 {
         self.options
+    }
+}
+
+// A Stream Start replication message (v2)
+#[derive(Debug)]
+pub struct StreamStartBody {
+    xid: u32,
+    is_first_segment: u8,
+}
+
+impl StreamStartBody {
+    #[inline]
+    /// The transaction ID of the transaction that started the stream
+    pub fn xid(&self) -> u32 {
+        self.xid
+    }
+
+    #[inline]
+    /// Whether this is the first segment of the stream for this XID
+    pub fn is_first_segment(&self) -> u8 {
+        self.is_first_segment
+    }
+}
+
+/// A Stream Stop replication message (v2)
+#[derive(Debug)]
+pub struct StreamStopBody {
+    // This message has no additional data fields
+}
+
+/// A Stream Commit replication message (v2)
+#[derive(Debug)]
+pub struct StreamCommitBody {
+    xid: u32,
+    flags: i8,
+    commit_lsn: u64,
+    end_lsn: u64,
+    timestamp: i64,
+}
+
+impl StreamCommitBody {
+    #[inline]
+    /// Xid of the transaction.
+    pub fn xid(&self) -> u32 {
+        self.xid
+    }
+
+    #[inline]
+    /// Flags; currently unused.
+    pub fn flags(&self) -> i8 {
+        self.flags
+    }
+
+    #[inline]
+    /// The LSN of the commit.
+    pub fn commit_lsn(&self) -> Lsn {
+        self.commit_lsn
+    }
+
+    #[inline]
+    /// The end LSN of the transaction.
+    pub fn end_lsn(&self) -> Lsn {
+        self.end_lsn
+    }
+
+    #[inline]
+    /// Commit timestamp of the transaction. The value is in number of microseconds since PostgreSQL epoch (2000-01-01).
+    pub fn timestamp(&self) -> i64 {
+        self.timestamp
+    }
+}
+
+/// A Stream Abort replication message (v2)
+#[derive(Debug)]
+pub struct StreamAbortBody {
+    xid: u32,
+    subxid: u32,
+}
+
+impl StreamAbortBody {
+    #[inline]
+    /// Xid of the transaction.
+    pub fn xid(&self) -> u32 {
+        self.xid
+    }
+
+    #[inline]
+    /// Xid of the subtransaction (will be same as xid of the transaction for top-level transactions).
+    pub fn subxid(&self) -> u32 {
+        self.subxid
     }
 }
 
