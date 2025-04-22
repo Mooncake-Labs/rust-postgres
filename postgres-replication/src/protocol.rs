@@ -14,6 +14,7 @@ pub const PRIMARY_KEEPALIVE_TAG: u8 = b'k';
 // logical replication message tags
 const BEGIN_TAG: u8 = b'B';
 const COMMIT_TAG: u8 = b'C';
+const MESSAGE_TAG: u8 = b'M';
 const ORIGIN_TAG: u8 = b'O';
 const RELATION_TAG: u8 = b'R';
 const TYPE_TAG: u8 = b'Y';
@@ -172,6 +173,8 @@ pub enum LogicalReplicationMessage {
     Begin(BeginBody),
     /// A BEGIN statement
     Commit(CommitBody),
+    /// A MESSAGE statement
+    Message(MessageBody),
     /// An Origin replication message
     /// Note that there can be multiple Origin messages inside a single transaction.
     Origin(OriginBody),
@@ -222,6 +225,18 @@ impl LogicalReplicationMessage {
                 commit_lsn: buf.read_u64::<BigEndian>()?,
                 end_lsn: buf.read_u64::<BigEndian>()?,
                 timestamp: buf.read_i64::<BigEndian>()?,
+            }),
+            MESSAGE_TAG => Self::Message(MessageBody {
+                xid: if in_streamed_transaction.get() {
+                    Some(buf.read_u32::<BigEndian>()?)
+                } else {
+                    None
+                },
+                flags: buf.read_i8()?,
+                message_lsn: buf.read_u64::<BigEndian>()?,
+                message_prefix: buf.read_string()?,
+                message_length: buf.read_u32::<BigEndian>()?,
+                message_data: buf.read_all(),
             }),
             ORIGIN_TAG => Self::Origin(OriginBody {
                 commit_lsn: buf.read_u64::<BigEndian>()?,
@@ -597,6 +612,54 @@ impl CommitBody {
     }
 }
 
+#[derive(Debug)]
+pub struct MessageBody {
+    xid: Option<u32>,
+    flags: i8,
+    message_lsn: u64,
+    message_prefix: String,
+    message_length: u32,
+    message_data: Bytes,
+}
+
+impl MessageBody {
+    #[inline]
+    /// The transaction ID of the transaction that started the stream
+    pub fn xid(&self) -> Option<u32> {
+        self.xid
+    }
+
+    #[inline]
+    /// Flags; currently unused.
+    pub fn flags(&self) -> i8 {
+        self.flags
+    }
+
+    #[inline]
+    /// The LSN of the message.
+    pub fn message_lsn(&self) -> Lsn {
+        self.message_lsn
+    }
+
+    #[inline]
+    /// The prefix of the message.
+    pub fn message_prefix(&self) -> &str {
+        &self.message_prefix
+    }
+
+    #[inline]
+    /// The length of the message.
+    pub fn message_length(&self) -> u32 {
+        self.message_length
+    }
+
+    #[inline]
+    /// The data of the message.
+    pub fn message_data(&self) -> &Bytes {
+        &self.message_data
+    }
+}
+
 /// An Origin replication message
 ///
 /// Note that there can be multiple Origin messages inside a single transaction.
@@ -951,6 +1014,26 @@ impl Buffer {
     #[inline]
     fn slice(&self) -> &[u8] {
         &self.bytes[self.idx..]
+    }
+
+    #[inline]
+    fn read_string(&mut self) -> io::Result<String> {
+        match memchr(0, self.slice()) {
+            Some(pos) => {
+                let start = self.idx;
+                let end = start + pos;
+                let bytes = self.bytes.slice(start..end);
+                let s = str::from_utf8(&bytes)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+                    .to_string();
+                self.idx = end + 1;
+                Ok(s)
+            }
+            None => Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "unexpected EOF while reading string",
+            )),
+        }
     }
 
     #[inline]
