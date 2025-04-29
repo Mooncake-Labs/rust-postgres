@@ -401,13 +401,16 @@ impl LogicalReplicationMessage {
                 })
             }
             STREAM_STOP_TAG if protocol_version >= 2 => Self::StreamStop(StreamStopBody {}),
-            STREAM_COMMIT_TAG if protocol_version >= 2 => Self::StreamCommit(StreamCommitBody {
-                xid: buf.read_u32::<BigEndian>()?,
-                flags: buf.read_i8()?,
-                commit_lsn: buf.read_u64::<BigEndian>()?,
-                end_lsn: buf.read_u64::<BigEndian>()?,
-                timestamp: buf.read_i64::<BigEndian>()?,
-            }),
+            STREAM_COMMIT_TAG if protocol_version >= 2 => {
+                in_streamed_transaciton.set(false);
+                Self::StreamCommit(StreamCommitBody {
+                    xid: buf.read_u32::<BigEndian>()?,
+                    flags: buf.read_i8()?,
+                    commit_lsn: buf.read_u64::<BigEndian>()?,
+                    end_lsn: buf.read_u64::<BigEndian>()?,
+                    timestamp: buf.read_i64::<BigEndian>()?,
+                })
+            }
             STREAM_ABORT_TAG if protocol_version >= 2 => {
                 in_streamed_transaciton.set(false);
                 Self::StreamAbort(StreamAbortBody {
