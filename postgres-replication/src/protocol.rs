@@ -202,7 +202,7 @@ impl LogicalReplicationMessage {
     pub fn parse(
         buf: &Bytes,
         protocol_version: u8,
-        in_streamed_transaciton: &Cell<bool>,
+        in_streamed_transaction: &Cell<bool>,
     ) -> io::Result<Self> {
         let mut buf = Buffer {
             bytes: buf.clone(),
@@ -228,7 +228,7 @@ impl LogicalReplicationMessage {
                 name: buf.read_cstr()?,
             }),
             RELATION_TAG => {
-                let xid = if in_streamed_transaciton.get() {
+                let xid = if in_streamed_transaction.get() {
                     Some(buf.read_u32::<BigEndian>()?)
                 } else {
                     None
@@ -265,7 +265,7 @@ impl LogicalReplicationMessage {
                 })
             }
             TYPE_TAG => Self::Type(TypeBody {
-                xid: if in_streamed_transaciton.get() {
+                xid: if in_streamed_transaction.get() {
                     Some(buf.read_u32::<BigEndian>()?)
                 } else {
                     None
@@ -275,7 +275,7 @@ impl LogicalReplicationMessage {
                 name: buf.read_cstr()?,
             }),
             INSERT_TAG => {
-                let xid = if in_streamed_transaciton.get() {
+                let xid = if in_streamed_transaction.get() {
                     Some(buf.read_u32::<BigEndian>()?)
                 } else {
                     None
@@ -296,7 +296,7 @@ impl LogicalReplicationMessage {
                 Self::Insert(InsertBody { xid, rel_id, tuple })
             }
             UPDATE_TAG => {
-                let xid = if in_streamed_transaciton.get() {
+                let xid = if in_streamed_transaction.get() {
                     Some(buf.read_u32::<BigEndian>()?)
                 } else {
                     None
@@ -343,7 +343,7 @@ impl LogicalReplicationMessage {
                 })
             }
             DELETE_TAG => {
-                let xid = if in_streamed_transaciton.get() {
+                let xid = if in_streamed_transaction.get() {
                     Some(buf.read_u32::<BigEndian>()?)
                 } else {
                     None
@@ -373,7 +373,7 @@ impl LogicalReplicationMessage {
                 })
             }
             TRUNCATE_TAG => {
-                let xid = if in_streamed_transaciton.get() {
+                let xid = if in_streamed_transaction.get() {
                     Some(buf.read_u32::<BigEndian>()?)
                 } else {
                     None
@@ -394,15 +394,18 @@ impl LogicalReplicationMessage {
             }
             // Protocol v2 messages
             STREAM_START_TAG if protocol_version >= 2 => {
-                in_streamed_transaciton.set(true);
+                in_streamed_transaction.set(true);
                 Self::StreamStart(StreamStartBody {
                     xid: buf.read_u32::<BigEndian>()?,
                     is_first_segment: buf.read_u8()?,
                 })
             }
-            STREAM_STOP_TAG if protocol_version >= 2 => Self::StreamStop(StreamStopBody {}),
+            STREAM_STOP_TAG if protocol_version >= 2 => {
+                in_streamed_transaction.set(false);
+                Self::StreamStop(StreamStopBody {})
+            }
             STREAM_COMMIT_TAG if protocol_version >= 2 => {
-                in_streamed_transaciton.set(false);
+                in_streamed_transaction.set(false);
                 Self::StreamCommit(StreamCommitBody {
                     xid: buf.read_u32::<BigEndian>()?,
                     flags: buf.read_i8()?,
@@ -412,7 +415,7 @@ impl LogicalReplicationMessage {
                 })
             }
             STREAM_ABORT_TAG if protocol_version >= 2 => {
-                in_streamed_transaciton.set(false);
+                in_streamed_transaction.set(false);
                 Self::StreamAbort(StreamAbortBody {
                     xid: buf.read_u32::<BigEndian>()?,
                     subxid: buf.read_u32::<BigEndian>()?,
