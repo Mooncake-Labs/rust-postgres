@@ -400,7 +400,10 @@ impl LogicalReplicationMessage {
                     is_first_segment: buf.read_u8()?,
                 })
             }
-            STREAM_STOP_TAG if protocol_version >= 2 => Self::StreamStop(StreamStopBody {}),
+            STREAM_STOP_TAG if protocol_version >= 2 => {
+                in_streamed_transaciton.set(false);
+                Self::StreamStop(StreamStopBody {})
+            }
             STREAM_COMMIT_TAG if protocol_version >= 2 => {
                 in_streamed_transaciton.set(false);
                 Self::StreamCommit(StreamCommitBody {
