@@ -181,15 +181,17 @@ async fn copy_both_recv_many_raw_batches() {
     q(&client, "COMMIT").await;
 
     let query = format!("START_REPLICATION SLOT slot_b LOGICAL {}", lsn);
-    let mut duplex = client
+    let duplex = client
         .copy_both_simple::<RawBytes>(&query)
         .await
         .expect("copy_both_simple");
 
+    futures_util::pin_mut!(duplex);
+
     // Batch fetch with different max sizes
     let mut out = Vec::<Result<Message, tokio_postgres::Error>>::new();
 
-    let n1 = duplex.recv_many_raw(&mut out, 1).await;
+    let n1 = duplex.as_mut().recv_many_raw(&mut out, 1).await;
     assert!(n1 <= 1);
     assert!(out
         .iter()
@@ -197,7 +199,7 @@ async fn copy_both_recv_many_raw_batches() {
         .all(|r| matches!(r, Ok(Message::CopyData(_)) | Ok(_))));
 
     out.clear();
-    let n2 = duplex.recv_many_raw(&mut out, 16).await;
+    let n2 = duplex.as_mut().recv_many_raw(&mut out, 16).await;
     assert!(n2 >= 1);
     // At least one XLogData (starts with 'w') should be present
     let have_w = out
@@ -218,13 +220,15 @@ async fn copy_both_recv_many_raw_zero_max() {
         .to_owned();
 
     let query = format!("START_REPLICATION SLOT slot_zero LOGICAL {}", lsn);
-    let mut duplex = client
+    let duplex = client
         .copy_both_simple::<RawBytes>(&query)
         .await
         .expect("copy_both_simple");
 
+    futures_util::pin_mut!(duplex);
+
     let mut out = Vec::<Result<Message, tokio_postgres::Error>>::new();
-    let n = duplex.recv_many_raw(&mut out, 0).await;
+    let n = duplex.as_mut().recv_many_raw(&mut out, 0).await;
     assert_eq!(n, 0);
     assert!(out.is_empty());
 }
@@ -240,13 +244,15 @@ async fn copy_both_error_with_recv_many_raw() {
     .await;
 
     // Enter CopyBoth and get an error
-    let mut duplex = client
+    let duplex = client
         .copy_both_simple::<RawBytes>("START_REPLICATION SLOT err_many PHYSICAL FFFF/FFFF")
         .await
         .unwrap();
 
+    futures_util::pin_mut!(duplex);
+
     let mut out = Vec::<Result<Message, tokio_postgres::Error>>::new();
-    let n = duplex.recv_many_raw(&mut out, 8).await;
+    let n = duplex.as_mut().recv_many_raw(&mut out, 8).await;
     assert!(n >= 1);
     assert!(out
         .iter()
