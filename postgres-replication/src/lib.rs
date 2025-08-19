@@ -28,13 +28,19 @@ pin_project! {
     pub struct ReplicationStream {
         #[pin]
         stream: CopyBothDuplex<Bytes>,
+        raw_scratch: Vec<Result<Message, Error>>,
+        frames_scratch: Vec<Result<ReplicationMessage<LogicalReplicationMessage>, Error>>,
     }
 }
 
 impl ReplicationStream {
     /// Creates a new ReplicationStream that will wrap the underlying CopyBoth stream
     pub fn new(stream: CopyBothDuplex<Bytes>) -> Self {
-        Self { stream }
+        Self {
+            stream,
+            raw_scratch: Vec::new(),
+            frames_scratch: Vec::new(),
+        }
     }
 
     /// Send standby update to server.
@@ -87,9 +93,12 @@ impl ReplicationStream {
         max: usize,
     ) -> usize {
         let this = self.project();
+        let raw = &mut *this.raw_scratch;
+        raw.clear();
+        raw.reserve(max);
 
-        let mut raw = Vec::with_capacity(max);
-        let n = this.stream.recv_many_raw(&mut raw, max).await;
+        let n = this.stream.recv_many_raw(raw, max).await;
+
         out.clear();
         out.reserve(n);
         for r in raw.drain(..n) {
