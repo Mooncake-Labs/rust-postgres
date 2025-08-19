@@ -7,6 +7,7 @@ use std::task::{Context, Poll};
 use bytes::{BufMut, Bytes, BytesMut};
 use futures_util::{ready, SinkExt, Stream};
 use pin_project_lite::pin_project;
+use postgres_protocol::message::backend::Message;
 use postgres_types::PgLsn;
 use tokio_postgres::CopyBothDuplex;
 use tokio_postgres::Error;
@@ -78,6 +79,29 @@ impl ReplicationStream {
         buf.put_u32(catalog_xmin_epoch);
 
         this.stream.send(buf.freeze()).await
+    }
+
+    pub async fn next_batch_msgs(
+        self: core::pin::Pin<&mut Self>,
+        out: &mut Vec<Result<ReplicationMessage<Bytes>, Error>>,
+        max: usize,
+    ) -> usize {
+        let this = self.project();
+
+        let mut raw = Vec::with_capacity(max);
+        let n = this.stream.recv_many_raw(&mut raw, max).await;
+        out.clear();
+        out.reserve(n);
+        for r in raw.drain(..n) {
+            out.push(match r {
+                Ok(Message::CopyData(body)) => {
+                    ReplicationMessage::parse(&body.into_bytes()).map_err(Error::parse)
+                }
+                Ok(_) => Err(Error::unexpected_message()),
+                Err(e) => Err(e),
+            });
+        }
+        n
     }
 }
 
@@ -154,6 +178,16 @@ impl LogicalReplicationStream {
                 catalog_xmin_epoch,
             )
             .await
+    }
+    /// Batches parsed replication messages (driven by CopyBothDuplex::recv_many_* below).
+    pub async fn next_batch_msgs(
+        self: core::pin::Pin<&mut Self>,
+        out: &mut Vec<Result<ReplicationMessage<bytes::Bytes>, Error>>,
+        max: usize,
+    ) -> usize {
+        let mut this = self.project();
+        // Forward to the inner stream's batch method
+        this.stream.as_mut().next_batch_msgs(out, max).await
     }
 }
 
