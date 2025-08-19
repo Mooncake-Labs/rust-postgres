@@ -7,6 +7,7 @@ This repository contains a slimmed-down version of the [rust-postgres] client wi
 - postgres-protocol: Low level Postgres protocol APIs
 - postgres-types: Conversions between Rust and Postgres values (required dependency)
 - postgres-derive: An internal crate used by postgres-types (required dependency)
+- postgres-native-tls: Support for connecting to postgres with TLS
 
 All testing components related to these crates have been retained, including:
 - postgres: The synchronous PostgreSQL client (kept for testing purposes)
