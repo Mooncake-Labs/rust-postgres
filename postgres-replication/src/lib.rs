@@ -103,6 +103,21 @@ impl ReplicationStream {
         }
         n
     }
+
+    /// Convert a raw replication message into a logical one.
+    fn convert_raw_msg(
+        msg: ReplicationMessage<bytes::Bytes>,
+        protocol_version: u8,
+        in_txn: &std::cell::Cell<bool>,
+    ) -> Result<ReplicationMessage<LogicalReplicationMessage>, Error> {
+        match msg {
+            ReplicationMessage::XLogData(body) => body
+                .map_data(|buf| LogicalReplicationMessage::parse(&buf, protocol_version, in_txn))
+                .map_err(Error::parse)
+                .map(ReplicationMessage::XLogData),
+            ReplicationMessage::PrimaryKeepAlive(k) => Ok(ReplicationMessage::PrimaryKeepAlive(k)),
+        }
+    }
 }
 
 impl Stream for ReplicationStream {
@@ -182,12 +197,26 @@ impl LogicalReplicationStream {
     /// Batches parsed replication messages (driven by CopyBothDuplex::recv_many_* below).
     pub async fn next_batch_msgs(
         self: core::pin::Pin<&mut Self>,
-        out: &mut Vec<Result<ReplicationMessage<bytes::Bytes>, Error>>,
+        out: &mut Vec<Result<ReplicationMessage<LogicalReplicationMessage>, Error>>,
         max: usize,
     ) -> usize {
         let mut this = self.project();
-        // Forward to the inner stream's batch method
-        this.stream.as_mut().next_batch_msgs(out, max).await
+
+        let mut frames = Vec::with_capacity(max);
+        let n = this.stream.as_mut().next_batch_msgs(&mut frames, max).await;
+
+        let protocol_version: u8 = *this.protocol_version;
+        let in_txn = &this.in_streamed_transaction;
+
+        out.clear();
+        out.reserve(n);
+        for f in frames.drain(..n) {
+            out.push(match f {
+                Ok(raw) => ReplicationStream::convert_raw_msg(raw, protocol_version, in_txn),
+                Err(e) => Err(e),
+            });
+        }
+        n
     }
 }
 
@@ -198,24 +227,15 @@ impl Stream for LogicalReplicationStream {
         let mut this = self.project();
         let protocol_version: u8 = *this.protocol_version;
         let stream = this.stream.as_mut();
+        let in_txn = &this.in_streamed_transaction;
 
         match ready!(stream.poll_next(cx)) {
-            Some(Ok(ReplicationMessage::XLogData(body))) => {
-                let body = body
-                    .map_data(|buf| {
-                        LogicalReplicationMessage::parse(
-                            &buf,
-                            protocol_version,
-                            this.in_streamed_transaction,
-                        )
-                    })
-                    .map_err(Error::parse)?;
-                Poll::Ready(Some(Ok(ReplicationMessage::XLogData(body))))
-            }
-            Some(Ok(ReplicationMessage::PrimaryKeepAlive(body))) => {
-                Poll::Ready(Some(Ok(ReplicationMessage::PrimaryKeepAlive(body))))
-            }
-            Some(Err(err)) => Poll::Ready(Some(Err(err))),
+            Some(Ok(raw)) => Poll::Ready(Some(ReplicationStream::convert_raw_msg(
+                raw,
+                protocol_version,
+                in_txn,
+            ))),
+            Some(Err(e)) => Poll::Ready(Some(Err(e))),
             None => Poll::Ready(None),
         }
     }
