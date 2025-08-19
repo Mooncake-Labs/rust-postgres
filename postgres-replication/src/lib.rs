@@ -155,6 +155,7 @@ pin_project! {
         stream: ReplicationStream,
         protocol_version: u8,
         in_streamed_transaction: Cell<bool>,
+        frames_scratch: Vec<Result<ReplicationMessage<bytes::Bytes>, Error>>,
     }
 }
 
@@ -165,6 +166,7 @@ impl LogicalReplicationStream {
             stream: ReplicationStream::new(stream),
             protocol_version: protocol_version.unwrap_or(1),
             in_streamed_transaction: Cell::new(false),
+            frames_scratch: Vec::new(),
         }
     }
 
@@ -211,8 +213,11 @@ impl LogicalReplicationStream {
     ) -> usize {
         let mut this = self.project();
 
-        let mut frames = Vec::with_capacity(max);
-        let n = this.stream.as_mut().next_batch_msgs(&mut frames, max).await;
+        let frames = &mut *this.frames_scratch;
+        frames.clear();
+        frames.reserve(max);
+
+        let n = this.stream.as_mut().next_batch_msgs(frames, max).await;
 
         let protocol_version: u8 = *this.protocol_version;
         let in_txn = &this.in_streamed_transaction;
