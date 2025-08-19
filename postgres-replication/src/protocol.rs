@@ -49,10 +49,7 @@ pub enum ReplicationMessage<D> {
 impl ReplicationMessage<Bytes> {
     #[inline]
     pub fn parse(buf: &Bytes) -> io::Result<Self> {
-        let mut buf = Buffer {
-            bytes: buf.clone(),
-            idx: 0,
-        };
+        let mut buf = Buffer { bytes: buf.clone() };
 
         let tag = buf.read_u8()?;
 
@@ -203,10 +200,7 @@ impl LogicalReplicationMessage {
         protocol_version: u8,
         in_streamed_transaction: &Cell<bool>,
     ) -> io::Result<Self> {
-        let mut buf = Buffer {
-            bytes: buf.clone(),
-            idx: 0,
-        };
+        let mut buf = Buffer { bytes: buf.clone() };
 
         let tag = buf.read_u8()?;
 
@@ -948,15 +942,9 @@ impl StreamAbortBody {
 
 struct Buffer {
     bytes: Bytes,
-    idx: usize,
 }
 
 impl Buffer {
-    #[inline]
-    fn slice(&self) -> &[u8] {
-        &self.bytes[self.idx..]
-    }
-
     #[inline(always)]
     fn read_cstr(&mut self) -> io::Result<Bytes> {
         let chunk = self.bytes.chunk();
@@ -1073,7 +1061,6 @@ mod tests {
         data.extend_from_slice(b"rest");
         let mut buf = Buffer {
             bytes: Bytes::from(data),
-            idx: 0,
         };
         let s = buf.read_cstr().unwrap();
         assert_eq!(get_str(&s).unwrap(), "hello");
@@ -1085,7 +1072,6 @@ mod tests {
     fn buffer_read_cstr_eof() {
         let mut buf = Buffer {
             bytes: Bytes::from_static(b"no-null"),
-            idx: 0,
         };
         let err = buf.read_cstr().unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
@@ -1095,7 +1081,6 @@ mod tests {
     fn buffer_read_len_ok_and_eof() {
         let mut buf = Buffer {
             bytes: Bytes::from_static(b"abcdef"),
-            idx: 0,
         };
         let part = buf.read_len(3).unwrap();
         assert_eq!(&part[..], b"abc");
@@ -1103,7 +1088,6 @@ mod tests {
         assert_eq!(&rest[..], b"def");
         let mut buf = Buffer {
             bytes: Bytes::from_static(b"xyz"),
-            idx: 0,
         };
         let err = buf.read_len(5).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
@@ -1450,7 +1434,6 @@ mod tests {
         // TupleData variants
         let mut buf = Buffer {
             bytes: Bytes::from_static(&[TUPLE_DATA_NULL_TAG]),
-            idx: 0,
         };
         assert!(matches!(
             TupleData::parse(&mut buf).unwrap(),
@@ -1459,7 +1442,6 @@ mod tests {
 
         let mut buf = Buffer {
             bytes: Bytes::from_static(&[TUPLE_DATA_TOAST_TAG]),
-            idx: 0,
         };
         assert!(matches!(
             TupleData::parse(&mut buf).unwrap(),
@@ -1472,7 +1454,6 @@ mod tests {
         data.extend_from_slice(b"abc");
         let mut buf = Buffer {
             bytes: Bytes::from(data),
-            idx: 0,
         };
         match TupleData::parse(&mut buf).unwrap() {
             TupleData::Text(b) => assert_eq!(&b[..], b"abc"),
