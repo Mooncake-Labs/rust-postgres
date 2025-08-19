@@ -37,6 +37,8 @@ use std::task::{Context, Poll};
 #[cfg(feature = "runtime")]
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::mpsc as tmpsc;
+use tokio_util::sync::PollSender;
 
 pub struct Responses {
     receiver: mpsc::Receiver<BackendMessages>,
@@ -44,8 +46,8 @@ pub struct Responses {
 }
 
 pub struct CopyBothHandles {
-    pub(crate) stream_receiver: mpsc::Receiver<Result<Message, Error>>,
-    pub(crate) sink_sender: mpsc::Sender<FrontendMessage>,
+    pub(crate) stream_receiver: tmpsc::Receiver<Result<Message, Error>>,
+    pub(crate) sink_sender: PollSender<FrontendMessage>,
 }
 
 impl Responses {
@@ -124,8 +126,10 @@ impl InnerClient {
 
     pub fn start_copy_both(&self) -> Result<CopyBothHandles, Error> {
         let (sender, receiver) = mpsc::channel(16);
-        let (stream_sender, stream_receiver) = mpsc::channel(16);
-        let (sink_sender, sink_receiver) = mpsc::channel(16);
+        let (stream_sender_raw, stream_receiver) = tmpsc::channel(16);
+        let (sink_sender_raw, sink_receiver) = tmpsc::channel(16);
+        let sink_sender = PollSender::new(sink_sender_raw);
+        let stream_sender = PollSender::new(stream_sender_raw);
 
         let responses = Responses {
             receiver,
