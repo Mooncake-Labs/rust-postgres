@@ -125,9 +125,10 @@ impl InnerClient {
     }
 
     pub fn start_copy_both(&self) -> Result<CopyBothHandles, Error> {
-        let (sender, receiver) = mpsc::channel(16);
-        let (stream_sender_raw, stream_receiver) = tmpsc::channel(16);
-        let (sink_sender_raw, sink_receiver) = tmpsc::channel(16);
+        let channel_size = 4_096;
+        let (sender, receiver) = mpsc::channel(channel_size);
+        let (stream_sender_raw, stream_receiver) = tmpsc::channel(channel_size);
+        let (sink_sender_raw, sink_receiver) = tmpsc::channel(channel_size);
         let sink_sender = PollSender::new(sink_sender_raw);
         let stream_sender = PollSender::new(stream_sender_raw);
 
