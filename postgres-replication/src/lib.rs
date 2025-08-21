@@ -29,7 +29,6 @@ pin_project! {
         #[pin]
         stream: CopyBothDuplex<Bytes>,
         raw_scratch: Vec<Result<Message, Error>>,
-        frames_scratch: Vec<Result<ReplicationMessage<LogicalReplicationMessage>, Error>>,
     }
 }
 
@@ -39,7 +38,6 @@ impl ReplicationStream {
         Self {
             stream,
             raw_scratch: Vec::new(),
-            frames_scratch: Vec::new(),
         }
     }
 
