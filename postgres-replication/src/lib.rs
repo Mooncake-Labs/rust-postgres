@@ -85,6 +85,9 @@ impl ReplicationStream {
         this.stream.send(buf.freeze()).await
     }
 
+    /// Batch-receive up to `max` backend messages and parse CopyData into replication messages.
+    ///
+    /// Clears the `out` buffer before writing and returns the number of items written.
     pub async fn next_batch_msgs(
         self: Pin<&mut Self>,
         out: &mut Vec<Result<ReplicationMessage<Bytes>, Error>>,
@@ -204,6 +207,8 @@ impl LogicalReplicationStream {
             .await
     }
     /// Batches parsed replication messages (driven by CopyBothDuplex::recv_many_* below).
+    ///
+    /// Clears the `out` buffer before writing and returns the number of items written.
     pub async fn next_batch_msgs(
         self: Pin<&mut Self>,
         out: &mut Vec<Result<ReplicationMessage<LogicalReplicationMessage>, Error>>,
