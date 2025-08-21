@@ -7,6 +7,7 @@ use std::task::{Context, Poll};
 use bytes::{BufMut, Bytes, BytesMut};
 use futures_util::{ready, SinkExt, Stream};
 use pin_project_lite::pin_project;
+use postgres_protocol::message::backend::Message;
 use postgres_types::PgLsn;
 use tokio_postgres::CopyBothDuplex;
 use tokio_postgres::Error;
@@ -27,13 +28,17 @@ pin_project! {
     pub struct ReplicationStream {
         #[pin]
         stream: CopyBothDuplex<Bytes>,
+        raw_scratch: Vec<Result<Message, Error>>,
     }
 }
 
 impl ReplicationStream {
     /// Creates a new ReplicationStream that will wrap the underlying CopyBoth stream
     pub fn new(stream: CopyBothDuplex<Bytes>) -> Self {
-        Self { stream }
+        Self {
+            stream,
+            raw_scratch: Vec::new(),
+        }
     }
 
     /// Send standby update to server.
@@ -79,6 +84,50 @@ impl ReplicationStream {
 
         this.stream.send(buf.freeze()).await
     }
+
+    /// Batch-receive up to `max` backend messages and parse CopyData into replication messages.
+    ///
+    /// Clears the `out` buffer before writing and returns the number of items written.
+    pub async fn next_batch_msgs(
+        self: Pin<&mut Self>,
+        out: &mut Vec<Result<ReplicationMessage<Bytes>, Error>>,
+        max: usize,
+    ) -> usize {
+        let this = self.project();
+        let raw = &mut *this.raw_scratch;
+        raw.clear();
+        raw.reserve(max);
+
+        let n = this.stream.recv_many_raw(raw, max).await;
+
+        out.clear();
+        out.reserve(n);
+        for r in raw.drain(..n) {
+            out.push(match r {
+                Ok(Message::CopyData(body)) => {
+                    ReplicationMessage::parse(&body.into_bytes()).map_err(Error::parse)
+                }
+                Ok(_) => Err(Error::unexpected_message()),
+                Err(e) => Err(e),
+            });
+        }
+        n
+    }
+
+    /// Convert a raw replication message into a logical one.
+    fn convert_raw_msg(
+        msg: ReplicationMessage<bytes::Bytes>,
+        protocol_version: u8,
+        in_txn: &std::cell::Cell<bool>,
+    ) -> Result<ReplicationMessage<LogicalReplicationMessage>, Error> {
+        match msg {
+            ReplicationMessage::XLogData(body) => body
+                .map_data(|buf| LogicalReplicationMessage::parse(&buf, protocol_version, in_txn))
+                .map_err(Error::parse)
+                .map(ReplicationMessage::XLogData),
+            ReplicationMessage::PrimaryKeepAlive(k) => Ok(ReplicationMessage::PrimaryKeepAlive(k)),
+        }
+    }
 }
 
 impl Stream for ReplicationStream {
@@ -107,6 +156,7 @@ pin_project! {
         stream: ReplicationStream,
         protocol_version: u8,
         in_streamed_transaction: Cell<bool>,
+        frames_scratch: Vec<Result<ReplicationMessage<bytes::Bytes>, Error>>,
     }
 }
 
@@ -117,6 +167,7 @@ impl LogicalReplicationStream {
             stream: ReplicationStream::new(stream),
             protocol_version: protocol_version.unwrap_or(1),
             in_streamed_transaction: Cell::new(false),
+            frames_scratch: Vec::new(),
         }
     }
 
@@ -155,6 +206,35 @@ impl LogicalReplicationStream {
             )
             .await
     }
+    /// Batches parsed replication messages (driven by CopyBothDuplex::recv_many_* below).
+    ///
+    /// Clears the `out` buffer before writing and returns the number of items written.
+    pub async fn next_batch_msgs(
+        self: Pin<&mut Self>,
+        out: &mut Vec<Result<ReplicationMessage<LogicalReplicationMessage>, Error>>,
+        max: usize,
+    ) -> usize {
+        let mut this = self.project();
+
+        let frames = &mut *this.frames_scratch;
+        frames.clear();
+        frames.reserve(max);
+
+        let n = this.stream.as_mut().next_batch_msgs(frames, max).await;
+
+        let protocol_version: u8 = *this.protocol_version;
+        let in_txn = &this.in_streamed_transaction;
+
+        out.clear();
+        out.reserve(n);
+        for f in frames.drain(..n) {
+            out.push(match f {
+                Ok(raw) => ReplicationStream::convert_raw_msg(raw, protocol_version, in_txn),
+                Err(e) => Err(e),
+            });
+        }
+        n
+    }
 }
 
 impl Stream for LogicalReplicationStream {
@@ -164,24 +244,15 @@ impl Stream for LogicalReplicationStream {
         let mut this = self.project();
         let protocol_version: u8 = *this.protocol_version;
         let stream = this.stream.as_mut();
+        let in_txn = &this.in_streamed_transaction;
 
         match ready!(stream.poll_next(cx)) {
-            Some(Ok(ReplicationMessage::XLogData(body))) => {
-                let body = body
-                    .map_data(|buf| {
-                        LogicalReplicationMessage::parse(
-                            &buf,
-                            protocol_version,
-                            this.in_streamed_transaction,
-                        )
-                    })
-                    .map_err(Error::parse)?;
-                Poll::Ready(Some(Ok(ReplicationMessage::XLogData(body))))
-            }
-            Some(Ok(ReplicationMessage::PrimaryKeepAlive(body))) => {
-                Poll::Ready(Some(Ok(ReplicationMessage::PrimaryKeepAlive(body))))
-            }
-            Some(Err(err)) => Poll::Ready(Some(Err(err))),
+            Some(Ok(raw)) => Poll::Ready(Some(ReplicationStream::convert_raw_msg(
+                raw,
+                protocol_version,
+                in_txn,
+            ))),
+            Some(Err(e)) => Poll::Ready(Some(Err(e))),
             None => Poll::Ready(None),
         }
     }

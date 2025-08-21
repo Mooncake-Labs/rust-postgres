@@ -158,3 +158,107 @@ async fn copy_both_future_cancellation() {
         }
     }
 }
+
+// New tests for tokio-based batching and closure semantics
+use bytes::Bytes as RawBytes;
+use postgres_protocol::message::backend::Message;
+
+#[tokio::test]
+async fn copy_both_recv_many_raw_batches() {
+    let client = crate::connect("user=postgres replication=database").await;
+
+    // Prepare data
+    q(&client, "DROP TABLE IF EXISTS replication_b").await;
+    q(&client, "CREATE TABLE replication_b (i text)").await;
+    let slot_query = "CREATE_REPLICATION_SLOT slot_b TEMPORARY LOGICAL \"test_decoding\"";
+    let lsn = q(&client, slot_query).await[0]
+        .get("consistent_point")
+        .unwrap()
+        .to_owned();
+    q(&client, "BEGIN").await;
+    q(&client, "INSERT INTO replication_b VALUES ('a')").await;
+    q(&client, "INSERT INTO replication_b VALUES ('b')").await;
+    q(&client, "COMMIT").await;
+
+    let query = format!("START_REPLICATION SLOT slot_b LOGICAL {}", lsn);
+    let duplex = client
+        .copy_both_simple::<RawBytes>(&query)
+        .await
+        .expect("copy_both_simple");
+
+    futures_util::pin_mut!(duplex);
+
+    // Batch fetch with different max sizes
+    let mut out = Vec::<Result<Message, tokio_postgres::Error>>::new();
+
+    let n1 = duplex.as_mut().recv_many_raw(&mut out, 1).await;
+    assert!(n1 <= 1);
+    assert!(out
+        .iter()
+        .take(n1)
+        .all(|r| matches!(r, Ok(Message::CopyData(_)) | Ok(_))));
+
+    out.clear();
+    let n2 = duplex.as_mut().recv_many_raw(&mut out, 16).await;
+    assert!(n2 >= 1);
+    // At least one XLogData (starts with 'w') should be present
+    let have_w = out
+        .iter()
+        .take(n2)
+        .any(|r| matches!(r, Ok(Message::CopyData(cd)) if cd.data()[0] == b'w'));
+    assert!(have_w);
+}
+
+#[tokio::test]
+async fn copy_both_recv_many_raw_zero_max() {
+    let client = crate::connect("user=postgres replication=database").await;
+
+    let slot_query = "CREATE_REPLICATION_SLOT slot_zero TEMPORARY LOGICAL \"test_decoding\"";
+    let lsn = q(&client, slot_query).await[0]
+        .get("consistent_point")
+        .unwrap()
+        .to_owned();
+
+    let query = format!("START_REPLICATION SLOT slot_zero LOGICAL {}", lsn);
+    let duplex = client
+        .copy_both_simple::<RawBytes>(&query)
+        .await
+        .expect("copy_both_simple");
+
+    futures_util::pin_mut!(duplex);
+
+    let mut out = Vec::<Result<Message, tokio_postgres::Error>>::new();
+    let n = duplex.as_mut().recv_many_raw(&mut out, 0).await;
+    assert_eq!(n, 0);
+    assert!(out.is_empty());
+}
+
+#[tokio::test]
+async fn copy_both_error_with_recv_many_raw() {
+    let client = crate::connect("user=postgres replication=database").await;
+
+    q(
+        &client,
+        "CREATE_REPLICATION_SLOT err_many TEMPORARY PHYSICAL",
+    )
+    .await;
+
+    // Enter CopyBoth and get an error
+    let duplex = client
+        .copy_both_simple::<RawBytes>("START_REPLICATION SLOT err_many PHYSICAL FFFF/FFFF")
+        .await
+        .unwrap();
+
+    futures_util::pin_mut!(duplex);
+
+    let mut out = Vec::<Result<Message, tokio_postgres::Error>>::new();
+    let n = duplex.as_mut().recv_many_raw(&mut out, 8).await;
+    assert!(n >= 1);
+    assert!(out
+        .iter()
+        .take(n)
+        .any(|r| matches!(r, Err(e) if e.as_db_error().is_some())));
+
+    // Ensure connection remains usable
+    assert_eq!(q(&client, "SELECT 1").await[0].get(0), Some("1"));
+}
