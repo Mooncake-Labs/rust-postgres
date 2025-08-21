@@ -86,7 +86,7 @@ impl ReplicationStream {
     }
 
     pub async fn next_batch_msgs(
-        self: core::pin::Pin<&mut Self>,
+        self: Pin<&mut Self>,
         out: &mut Vec<Result<ReplicationMessage<Bytes>, Error>>,
         max: usize,
     ) -> usize {
@@ -205,7 +205,7 @@ impl LogicalReplicationStream {
     }
     /// Batches parsed replication messages (driven by CopyBothDuplex::recv_many_* below).
     pub async fn next_batch_msgs(
-        self: core::pin::Pin<&mut Self>,
+        self: Pin<&mut Self>,
         out: &mut Vec<Result<ReplicationMessage<LogicalReplicationMessage>, Error>>,
         max: usize,
     ) -> usize {

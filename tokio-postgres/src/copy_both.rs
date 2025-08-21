@@ -273,7 +273,7 @@ impl<T> CopyBothDuplex<T> {
     /// Drain up to `max` raw protocol messages from the receiver in **one await**.
     /// Reuses the caller's buffer; returns the number of items written.
     pub async fn recv_many_raw(
-        self: core::pin::Pin<&mut Self>,
+        self: Pin<&mut Self>,
         out: &mut Vec<Result<Message, Error>>,
         max: usize,
     ) -> usize {
