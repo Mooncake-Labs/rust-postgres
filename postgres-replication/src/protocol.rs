@@ -59,11 +59,13 @@ impl ReplicationMessage<Bytes> {
                 let wal_end = buf.read_u64_be()?;
                 let timestamp = buf.read_i64_be()?;
                 let data = buf.read_all();
+                let data_len = data.len();
                 ReplicationMessage::XLogData(XLogDataBody {
                     wal_start,
                     wal_end,
                     timestamp,
                     data,
+                    data_len,
                 })
             }
             PRIMARY_KEEPALIVE_TAG => {
@@ -94,6 +96,7 @@ pub struct XLogDataBody<D> {
     wal_end: u64,
     timestamp: i64,
     data: D,
+    data_len: usize,
 }
 
 impl<D> XLogDataBody<D> {
@@ -122,6 +125,11 @@ impl<D> XLogDataBody<D> {
         self.data
     }
 
+    #[inline]
+    pub fn data_len(&self) -> usize {
+        self.data_len
+    }
+
     pub fn map_data<F, D2, E>(self, f: F) -> Result<XLogDataBody<D2>, E>
     where
         F: Fn(D) -> Result<D2, E>,
@@ -132,6 +140,7 @@ impl<D> XLogDataBody<D> {
             wal_end: self.wal_end,
             timestamp: self.timestamp,
             data,
+            data_len: self.data_len,
         })
     }
 }
@@ -1108,6 +1117,7 @@ mod tests {
                 assert_eq!(body.wal_end(), 2);
                 assert_eq!(body.timestamp(), 3);
                 assert_eq!(&body.data()[..], b"payload");
+                assert_eq!(body.data_len(), b"payload".len());
             }
             _ => panic!("expected XLogData"),
         }
